@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>3DGS Viewer · Floor 1 · Walk</title>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:rgba(16,19,24,.78); --line:rgba(120,140,160,.18);
+    --ink:#cdd6e0; --dim:#7e8a97; --mint:#9fe0c0; --lock:#5a636e; --here:#9fe0c0;
+  }
+  html,body{margin:0;height:100%;background:var(--bg);overflow:hidden;
+    font-family:ui-monospace,Menlo,monospace;color:var(--ink);}
+  #stage{position:fixed;inset:0;cursor:grab;}
+  #stage.dragging{cursor:grabbing;}
+  .panel{position:fixed;z-index:10;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:12px;
+    backdrop-filter:blur(6px);}
+
+  #ui{top:12px;left:12px;max-width:235px;max-height:calc(100vh - 24px);overflow:auto;}
+  #ui .hint{color:var(--dim);line-height:1.55;}
+  #ui .hint b{color:var(--ink);font-weight:600;}
+  #ui label.field{display:block;margin-top:10px;color:var(--dim);}
+  select{width:100%;margin-top:4px;background:#11151a;color:var(--ink);
+    border:1px solid var(--line);border-radius:7px;padding:6px;font:inherit;}
+  #pick label{display:inline-block;margin-top:10px;cursor:pointer;color:#0b0d10;
+    background:var(--mint);padding:6px 10px;border-radius:7px;font-weight:600;}
+  #pick input{display:none;}
+  #status{margin-top:8px;color:var(--dim);}
+
+  .row{display:flex;align-items:center;gap:8px;margin-top:10px;}
+  input[type=range]{flex:1;accent-color:var(--mint);}
+  #speedVal{width:34px;text-align:right;color:var(--mint);}
+  .toggle{display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer;user-select:none;}
+  .toggle input{accent-color:var(--mint);}
+  button.btn{background:#11151a;color:var(--ink);border:1px solid var(--line);
+    border-radius:7px;padding:5px 7px;font:inherit;font-size:11px;cursor:pointer;}
+  button.btn:active{background:var(--mint);color:#0b0d10;}
+  #orient{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;}
+  #orientVal{margin-top:6px;color:var(--dim);font-size:11px;}
+  #orientVal b{color:var(--mint);}
+  #reset{margin-top:10px;width:100%;}
+
+  #pad{display:grid;grid-template-columns:repeat(3,30px);grid-template-rows:repeat(3,30px);
+    gap:4px;margin-top:10px;}
+  .pad-btn{display:flex;align-items:center;justify-content:center;cursor:pointer;
+    background:#11151a;border:1px solid var(--line);border-radius:6px;color:var(--ink);
+    user-select:none;-webkit-user-select:none;touch-action:none;font-size:13px;}
+  .pad-btn:active,.pad-btn.on{background:var(--mint);color:#0b0d10;}
+  .pad-empty{visibility:hidden;}
+  .vert{display:flex;gap:4px;margin-top:6px;}
+  .vert .pad-btn{flex:1;font-size:11px;}
+
+  #route{top:12px;right:12px;}
+  #route .title{color:var(--dim);margin-bottom:8px;letter-spacing:.04em;}
+  .rooms{display:flex;gap:6px;flex-wrap:wrap;max-width:260px;}
+  .room{position:relative;min-width:42px;text-align:center;padding:6px 8px;
+    border:1px solid var(--line);border-radius:7px;background:#11151a;cursor:pointer;
+    color:var(--ink);font-weight:600;}
+  .room.locked{cursor:not-allowed;color:var(--lock);border-style:dashed;background:transparent;}
+  .room.here{background:var(--here);color:#0b0d10;border-color:var(--here);
+    box-shadow:0 0 0 2px rgba(159,224,192,.25);}
+  .room .lk{font-size:9px;display:block;margin-top:1px;color:var(--lock);font-weight:400;}
+
+  #gizmo{right:12px;bottom:12px;padding:8px 10px;display:flex;align-items:center;gap:10px;}
+  #gizmoCanvas{display:block;}
+  #coords{font-size:11px;line-height:1.6;color:var(--dim);}
+  #coords b{color:var(--ink);font-weight:600;}
+  .ax-x{color:#e06666;} .ax-y{color:#8fd08f;} .ax-z{color:#6fa8e0;}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<!-- LEFT -->
+<div id="ui" class="panel">
+  <div class="hint">
+    <b>drag</b> = look · <b>WASD / arrows</b> = walk<br>
+    <b>scroll</b> = fwd/back · <b>E·Space</b> up · <b>Q</b> down<br>
+    <b>Shift</b> = faster · <b>F</b> = fly · <b>R</b> = reset
+  </div>
+
+  <label class="field">Room</label>
+  <select id="roomSelect"></select>
+
+  <label class="field">Splat orientation (fix kebalik)</label>
+  <div id="orient">
+    <button class="btn" data-rot="flipx">Flip ⤵</button>
+    <button class="btn" data-rot="x">X+90</button>
+    <button class="btn" data-rot="y">Y+90</button>
+    <button class="btn" data-rot="z">Z+90</button>
+    <button class="btn" data-rot="reset">0</button>
+  </div>
+  <div id="orientVal">rot <b>0, 0, 0</b> — bake into ROOMS once right</div>
+
+  <div class="row"><span style="color:var(--dim)">speed</span>
+    <input id="speed" type="range" min="0.1" max="20" step="0.1" value="2">
+    <span id="speedVal">2.0</span>
+  </div>
+
+  <label class="toggle"><input id="fly" type="checkbox"> fly mode (free up/down)</label>
+  <label class="toggle"><input id="freelook" type="checkbox"> free look (no up/down limit)</label>
+
+  <div id="pad">
+    <div class="pad-empty"></div>
+    <div class="pad-btn" data-key="w">▲</div>
+    <div class="pad-empty"></div>
+    <div class="pad-btn" data-key="a">◀</div>
+    <div class="pad-btn" data-key="s">▼</div>
+    <div class="pad-btn" data-key="d">▶</div>
+    <div class="pad-empty"></div>
+    <div class="pad-empty"></div>
+    <div class="pad-empty"></div>
+  </div>
+  <div class="vert">
+    <div class="pad-btn" data-key="e">up</div>
+    <div class="pad-btn" data-key="q">down</div>
+  </div>
+
+  <button id="reset" class="btn">Reset view (R)</button>
+
+  <div id="pick"><label>Load file<input id="file" type="file" accept=".ply,.splat,.ksplat"/></label></div>
+  <div id="status">Looking for scene.ply…</div>
+</div>
+
+<!-- TOP-RIGHT -->
+<div id="route" class="panel">
+  <div class="title">FLOOR 1 · ROUTE</div>
+  <div id="rooms" class="rooms"></div>
+</div>
+
+<!-- BOTTOM-RIGHT -->
+<div id="gizmo" class="panel">
+  <canvas id="gizmoCanvas" width="84" height="84"></canvas>
+  <div id="coords">
+    <span class="ax-x">X</span> <b id="cx">0.00</b><br>
+    <span class="ax-y">Y</span> <b id="cy">0.00</b><br>
+    <span class="ax-z">Z</span> <b id="cz">0.00</b>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import * as GS from '@mkkellogg/gaussian-splats-3d';
+
+/* ROOM CONFIG */
+const ROOMS = [
+  { id:102, file:'kelas102.ply', locked:false, rot:[0,0,0] },
+  { id:103, file:'kelas103.ply', locked:false, rot:[0,0,0] },
+  { id:107, file:'kelas107.ply', locked:false, rot:[0,0,0] },
+  { id:113, file:'Kelas_113.ply', locked:false, rot:[0,0,0] },
+];
+// 
+const statusEl = document.getElementById('status');
+const setStatus = t => statusEl.textContent = t;
+let viewer = null;
+let currentRoomId = null;
+let currentSource = null;          // {url, format}
+let sceneRot = { x:0, y:0, z:0 };  // current orientation correction (deg)
+
+/* first-person camera state  */
+const pos = new THREE.Vector3();
+const camQuat = new THREE.Quaternion();
+const initPos = new THREE.Vector3();
+const initQuat = new THREE.Quaternion();
+let fly = false, freeLook = false, speed = 2.0;
+const MAXP = 1.5533;                 // ~89° clamp (used only when free-look is OFF)
+const LOOK = 0.005;
+const WORLD_UP = new THREE.Vector3(0,1,0);
+const LOCAL_X  = new THREE.Vector3(1,0,0);
+const qTmp = new THREE.Quaternion();
+const vF = new THREE.Vector3(), vR = new THREE.Vector3();
+const _euler = new THREE.Euler(0,0,0,'YXZ');
+
+function formatFor(name){
+  const n = name.toLowerCase();
+  if(n.endsWith('.splat'))  return GS.SceneFormat.Splat;
+  if(n.endsWith('.ksplat')) return GS.SceneFormat.KSplat;
+  return GS.SceneFormat.Ply;
+}
+
+function rotToQuatArray(){
+  const e = new THREE.Euler(
+    THREE.MathUtils.degToRad(sceneRot.x),
+    THREE.MathUtils.degToRad(sceneRot.y),
+    THREE.MathUtils.degToRad(sceneRot.z), 'XYZ');
+  const q = new THREE.Quaternion().setFromEuler(e);
+  return [q.x, q.y, q.z, q.w];
+}
+
+/* ---- load + take the camera over ---- */
+async function loadScene(url, format){
+  currentSource = { url, format };
+  setStatus('Loading…');
+  if(viewer){ try{ viewer.dispose(); }catch(e){} viewer = null; }
+  document.querySelectorAll('canvas').forEach(c=>{ if(c.id!=='gizmoCanvas') c.remove(); });
+
+  viewer = new GS.Viewer({
+    cameraUp:[0,1,0],
+    sharedMemoryForWorkers:false,
+    useBuiltInControls:true,    // briefly, so the library auto-frames the splat
+    selfDrivenMode:true
+  });
+  try{
+    await viewer.addSplatScene(url, {
+      format, showLoadingUI:false, progressiveLoad:false,
+      rotation: rotToQuatArray()        // orientation correction applied to the splat
+    });
+    viewer.start();
+    takeOverCamera();
+    setStatus('Loaded. Drag to look, WASD to walk.');
+  }catch(e){
+    setStatus('Load failed: '+e.message);
+    console.error(e);
+  }
+}
+
+function takeOverCamera(){
+  const cam = viewer && viewer.camera;
+  if(!cam) return;
+
+  let start = cam.position.clone();
+  try{ if(viewer.controls && viewer.controls.target) start = viewer.controls.target.clone(); }catch(e){}
+  pos.copy(start);
+
+  const fwd = new THREE.Vector3(); cam.getWorldDirection(fwd);
+  const l = Math.hypot(fwd.x, fwd.z) || 1;
+  const yaw = Math.atan2(-fwd.x/l, -fwd.z/l);
+  _euler.set(0, yaw, 0, 'YXZ');
+  camQuat.setFromEuler(_euler);
+  initPos.copy(pos); initQuat.copy(camQuat);
+
+  let radius = 5;
+  try{ if(viewer.controls && viewer.controls.target) radius = Math.max(cam.position.distanceTo(viewer.controls.target), 0.5); }catch(e){}
+  speed = Math.min(Math.max(radius * 0.4, 0.2), 20);
+  speedEl.value = speed.toFixed(1); speedValEl.textContent = speed.toFixed(1);
+
+  try{
+    if(viewer.controls){
+      viewer.controls.dispose();
+      viewer.controls.update = ()=>{};
+      viewer.controls.enabled = false;
+    }
+  }catch(e){}
+}
+
+function loadRoom(room){
+  if(room.locked){ setStatus(`Room ${room.id} is locked — no capture available.`); return; }
+  currentRoomId = room.id;
+  document.getElementById('roomSelect').value = String(room.id);
+  sceneRot = { x:(room.rot?.[0])||0, y:(room.rot?.[1])||0, z:(room.rot?.[2])||0 };
+  updateOrientVal();
+  renderRoute();
+  loadScene(room.file, formatFor(room.file));
+}
+
+/*  dropdown  */
+const select = document.getElementById('roomSelect');
+const def = document.createElement('option');
+def.value='default'; def.textContent='Default (kelas107.ply)';
+select.appendChild(def);
+ROOMS.forEach(r=>{
+  const o=document.createElement('option');
+  o.value=String(r.id); o.textContent=`Room ${r.id}`+(r.locked?' · locked':''); o.disabled=r.locked;
+  select.appendChild(o);
+});
+select.addEventListener('change', e=>{
+  const v=e.target.value;
+  if(v==='default'){ currentRoomId=null; sceneRot={x:0,y:0,z:0}; updateOrientVal(); renderRoute(); loadScene('kelas107.ply', GS.SceneFormat.Ply); return; }
+  const room=ROOMS.find(r=>String(r.id)===v); if(room) loadRoom(room);
+});
+
+/*  route  */
+const roomsEl=document.getElementById('rooms');
+function renderRoute(){
+  roomsEl.innerHTML='';
+  ROOMS.forEach(r=>{
+    const d=document.createElement('div');
+    d.className='room'+(r.locked?' locked':'')+(r.id===currentRoomId?' here':'');
+    d.innerHTML=r.id+(r.locked?'<span class="lk">locked</span>':'');
+    if(!r.locked) d.addEventListener('click', ()=>loadRoom(r));
+    roomsEl.appendChild(d);
+  });
+}
+renderRoute();
+
+/*  file picker  */
+document.getElementById('file').addEventListener('change', ev=>{
+  const f=ev.target.files[0]; if(!f) return;
+  currentRoomId=null; sceneRot={x:0,y:0,z:0}; updateOrientVal(); renderRoute();
+  loadScene(URL.createObjectURL(f), formatFor(f.name));
+});
+
+/*  orientation buttons (live un-flip, then bake into config)  */
+const orientValEl=document.getElementById('orientVal');
+function updateOrientVal(){ orientValEl.innerHTML=`rot <b>${sceneRot.x}, ${sceneRot.y}, ${sceneRot.z}</b> — bake into ROOMS once right`; }
+document.querySelectorAll('#orient .btn').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    const t=b.dataset.rot;
+    if(t==='reset')      sceneRot={x:0,y:0,z:0};
+    else if(t==='flipx') sceneRot.x=(sceneRot.x+180)%360;
+    else                 sceneRot[t]=(sceneRot[t]+90)%360;
+    updateOrientVal();
+    if(currentSource) loadScene(currentSource.url, currentSource.format);
+  });
+});
+
+/* 
+   FIRST-PERSON CONTROLLER (quaternion look)
+    */
+const keys={ w:false,a:false,s:false,d:false,q:false,e:false,shift:false };
+const stage=document.getElementById('stage');
+
+const speedEl=document.getElementById('speed');
+const speedValEl=document.getElementById('speedVal');
+speedEl.addEventListener('input', ()=>{ speed=parseFloat(speedEl.value); speedValEl.textContent=speed.toFixed(1); });
+
+const flyEl=document.getElementById('fly');
+flyEl.addEventListener('change', ()=> fly=flyEl.checked);
+const freeEl=document.getElementById('freelook');
+freeEl.addEventListener('change', ()=> freeLook=freeEl.checked);
+
+function resetView(){ pos.copy(initPos); camQuat.copy(initQuat); }
+document.getElementById('reset').addEventListener('click', resetView);
+
+function setKey(e,v){
+  const tag=(e.target.tagName||'').toUpperCase();
+  if(tag==='INPUT'||tag==='SELECT'||tag==='BUTTON') return;
+  const k=e.key.toLowerCase();
+  if(k==='w'||k==='arrowup')         keys.w=v;
+  else if(k==='s'||k==='arrowdown')  keys.s=v;
+  else if(k==='a'||k==='arrowleft')  keys.a=v;
+  else if(k==='d'||k==='arrowright') keys.d=v;
+  else if(k==='q')                   keys.q=v;
+  else if(k==='e'||k===' ')          keys.e=v;
+  else if(k==='shift')               keys.shift=v;
+  else if(k==='f'&&v){ fly=!fly; flyEl.checked=fly; return; }
+  else if(k==='r'&&v){ resetView(); return; }
+  else return;
+  e.preventDefault();
+}
+window.addEventListener('keydown', e=>setKey(e,true));
+window.addEventListener('keyup',   e=>setKey(e,false));
+
+document.querySelectorAll('.pad-btn').forEach(btn=>{
+  const k=btn.dataset.key;
+  const on =ev=>{ ev.preventDefault(); keys[k]=true;  btn.classList.add('on'); };
+  const off=ev=>{ ev.preventDefault(); keys[k]=false; btn.classList.remove('on'); };
+  btn.addEventListener('pointerdown',on);
+  btn.addEventListener('pointerup',off);
+  btn.addEventListener('pointerleave',off);
+  btn.addEventListener('pointercancel',off);
+});
+
+/* drag-to-look: yaw about WORLD up, pitch about LOCAL right */
+let dragging=false,lastX=0,lastY=0;
+window.addEventListener('pointerdown', e=>{
+  if(e.target.closest && e.target.closest('.panel')) return;
+  dragging=true; lastX=e.clientX; lastY=e.clientY; stage.classList.add('dragging');
+});
+window.addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  const dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
+  // yaw (world up) — keeps horizon level, no roll drift
+  qTmp.setFromAxisAngle(WORLD_UP, -dx*LOOK);
+  camQuat.premultiply(qTmp);
+  // pitch (local right)
+  qTmp.setFromAxisAngle(LOCAL_X, -dy*LOOK);
+  if(freeLook){
+    camQuat.multiply(qTmp);                 // full vertical loop allowed
+  }else{
+    const test=camQuat.clone().multiply(qTmp);
+    vF.set(0,0,-1).applyQuaternion(test);
+    if(Math.abs(vF.y) <= Math.sin(MAXP)) camQuat.copy(test);  // else block past ~89°
+  }
+  camQuat.normalize();
+});
+const endDrag=()=>{ dragging=false; stage.classList.remove('dragging'); };
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', endDrag);
+
+/* scroll dolly along heading */
+window.addEventListener('wheel', e=>{
+  if(e.target.closest && e.target.closest('.panel')) return;
+  vF.set(0,0,-1).applyQuaternion(camQuat);
+  if(!fly){ vF.y=0; const n=vF.length()||1; vF.multiplyScalar(1/n); }
+  const step=-e.deltaY*speed*0.0015;
+  pos.addScaledVector(vF, step);
+}, { passive:true });
+
+function updateView(dt){
+  const cam=viewer && viewer.camera; if(!cam) return;
+
+  vF.set(0,0,-1).applyQuaternion(camQuat);
+  vR.set(1,0,0).applyQuaternion(camQuat);
+  if(!fly){ vF.y=0; vR.y=0; }
+  if(vF.lengthSq()>1e-9) vF.normalize();
+  if(vR.lengthSq()>1e-9) vR.normalize();
+
+  const f=(keys.w?1:0)-(keys.s?1:0);
+  const s=(keys.d?1:0)-(keys.a?1:0);
+  const u=(keys.e?1:0)-(keys.q?1:0);
+  const move=new THREE.Vector3();
+  move.addScaledVector(vF,f).addScaledVector(vR,s);
+  move.y += u;                          // manual height
+  if(move.lengthSq()>0){
+    move.normalize().multiplyScalar(speed*(keys.shift?3:1)*dt);
+    pos.add(move);
+  }
+
+  cam.position.copy(pos);
+  cam.quaternion.copy(camQuat);
+}
+
+/* 
+   GIZMO + coordinates
+    */
+const gCanvas=document.getElementById('gizmoCanvas');
+const gRenderer=new THREE.WebGLRenderer({ canvas:gCanvas, alpha:true, antialias:true });
+gRenderer.setSize(84,84,false);
+const gScene=new THREE.Scene();
+const gCam=new THREE.PerspectiveCamera(40,1,0.1,100);
+gScene.add(new THREE.AxesHelper(1));
+function axisLabel(text,color,p){
+  const c=document.createElement('canvas'); c.width=c.height=64;
+  const ctx=c.getContext('2d');
+  ctx.fillStyle=color; ctx.font='bold 46px ui-monospace,monospace';
+  ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(text,32,34);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(c), depthTest:false }));
+  sp.position.copy(p); sp.scale.setScalar(0.45); return sp;
+}
+gScene.add(axisLabel('X','#e06666',new THREE.Vector3(1.25,0,0)));
+gScene.add(axisLabel('Y','#8fd08f',new THREE.Vector3(0,1.25,0)));
+gScene.add(axisLabel('Z','#6fa8e0',new THREE.Vector3(0,0,1.25)));
+const cxEl=document.getElementById('cx'),cyEl=document.getElementById('cy'),czEl=document.getElementById('cz');
+const gDir=new THREE.Vector3();
+function updateGizmo(){
+  const cam=viewer && viewer.camera; if(!cam) return;
+  cam.getWorldDirection(gDir);
+  gCam.position.copy(gDir).multiplyScalar(-3.2);
+  gCam.up.copy(cam.up); gCam.lookAt(0,0,0);
+  gRenderer.render(gScene,gCam);
+  cxEl.textContent=cam.position.x.toFixed(2);
+  cyEl.textContent=cam.position.y.toFixed(2);
+  czEl.textContent=cam.position.z.toFixed(2);
+}
+
+const clock=new THREE.Clock();
+function frame(){
+  requestAnimationFrame(frame);
+  const dt=Math.min(clock.getDelta(),0.05);
+  updateView(dt);
+  updateGizmo();
+}
+frame();
+
+loadScene('kelas107.ply', GS.SceneFormat.Ply)
+  .catch(()=> setStatus('No kelas107.ply — pick a room or load a file.'));
+</script>
+</body>
+</html>
